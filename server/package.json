@@ -1,5 +1,5 @@
 {
-  "name": "@grokbot/server",
+  "name": "@goatbot/server",
   "private": true,
   "type": "module",
   "scripts": {
