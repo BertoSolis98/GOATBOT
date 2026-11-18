@@ -83,6 +83,18 @@ Hermes Desktop has its own Bot Mode. GoatBot uses the same Hermes engine but doe
 
 So bots made here do not show up in Hermes Desktop's Bots tab, and bots made there do not show up here.
 
+## Run it on your own PC (Docker, no Orgo)
+
+Everything in one container on your own computer: the app, a Hermes agent as the first bot, and a screen per bot. Open it from your other devices through Tailscale.
+
+```bash
+cp docker/goatbot.env.example docker/goatbot.env   # fill it in
+docker compose up -d --build
+docker compose exec goatbot goatbot-sign-in you@example.com
+```
+
+Step-by-step for Windows (WSL2, Docker Desktop, memory settings, Tailscale): **[docs/run-on-your-pc.md](docs/run-on-your-pc.md)**.
+
 ## Install on the computer
 
 The app is meant to run on the same Orgo computer as Hermes.
@@ -196,7 +208,7 @@ docs/               architecture; the Orgo and xAI/Composio guides predate the H
 
 - Experimental, no security audit. Bots share one computer and can reach each other's files there.
 - Approval cards cover Composio write actions and, through the [approval gate](#approvals), shell commands, code, opening sites and screen control. Hermes' own "risky command" prompts are not shown in the app yet.
-- Four bots at most, because of Orgo's four-screen limit.
+- Four bots at most, because of Orgo's four-screen limit (on your own PC, `MAX_BOTS` and your RAM decide).
 - The screen look is an original implementation inspired by OrgoAI/bops; no code or assets from that repository are used.
 
 ## License and credits

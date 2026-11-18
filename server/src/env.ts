@@ -17,6 +17,9 @@ function secret(name: string): string {
   throw new Error(`Missing env ${name} (or ${name}_FILE)`);
 }
 
+/** Where the bots' screens live: an Orgo computer, or this machine (see docker/ and local-desktop.ts). */
+const computer: 'orgo' | 'local' = process.env.COMPUTER === 'local' ? 'local' : 'orgo';
+
 const hermesHome = process.env.HERMES_HOME_PRIMARY ?? path.join(os.homedir(), '.hermes');
 
 export const env = {
@@ -27,7 +30,9 @@ export const env = {
   xaiKey: req('XAI_API_KEY'),
   xaiModel: process.env.XAI_MODEL ?? 'grok-4.7',
   composioKey: req('COMPOSIO_API_KEY'),
-  orgoKey: secret('ORGO_API_KEY'),
+  computer,
+  // Not needed when the computer is this machine.
+  orgoKey: computer === 'local' ? (process.env.ORGO_API_KEY ?? '') : secret('ORGO_API_KEY'),
   sessionSecret: req('SESSION_SECRET'),
   devLogin: process.env.DEV_LOGIN === '1',
   dbPath: process.env.DB_PATH ?? new URL('../../data/goatbot.db', import.meta.url).pathname,
@@ -53,9 +58,9 @@ export const env = {
 
   // ---- the one shared computer ----
   /** The Orgo computer every bot works on (one screen each). Empty = legacy one-box-per-user mode is not supported. */
-  orgoComputerId: process.env.ORGO_COMPUTER_ID ?? '',
+  orgoComputerId: computer === 'local' ? 'local' : (process.env.ORGO_COMPUTER_ID ?? ''),
   /** This server runs on that computer, so shell commands run locally instead of through Orgo's API. */
-  localBox: process.env.HQ_LOCAL === '1',
+  localBox: computer === 'local' || process.env.HQ_LOCAL === '1',
   /**
    * DevTools URL of a Chrome that already runs on the default screen and belongs to the primary bot
    * (e.g. http://127.0.0.1:9333). When set, we never start or stop that screen's Chrome ourselves.
