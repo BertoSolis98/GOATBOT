@@ -1,4 +1,5 @@
 import { env } from './env.js';
+import { localDesktop } from './local-desktop.js';
 
 const BASE = 'https://www.orgo.ai/api';
 
@@ -50,7 +51,7 @@ export interface OrgoScreen { id: string; display: string; width: number; height
 
 const q = (screen?: string) => (screen && screen !== 'default' ? `?screen=${encodeURIComponent(screen)}` : '');
 
-export const orgo = {
+const remote = {
   workspaces: () => call<any>('GET', '/workspaces'),
 
   getComputer: (id: string) => call<OrgoComputer>('GET', `/computers/${id}`),
@@ -81,3 +82,9 @@ export const orgo = {
   exportFile: (id: string, path: string) =>
     call<{ url?: string; file?: { id: string; url?: string; filename?: string }; [k: string]: unknown }>('POST', '/files/export', { desktopId: id, path }, { timeoutMs: 180_000 }),
 };
+
+/**
+ * The bots' computer: Orgo's API, or this machine itself when COMPUTER=local (local-desktop.ts).
+ * Both answer the same calls; the local one only the ones GoatBot needs on its own machine.
+ */
+export const orgo: typeof remote = env.computer === 'local' ? (localDesktop as unknown as typeof remote) : remote;

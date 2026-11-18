@@ -1,0 +1,31 @@
+# GoatBot on your own machine, no Orgo account needed. See docs/run-on-your-pc.md.
+#
+#   cp docker/goatbot.env.example docker/goatbot.env    # then fill it in
+#   docker compose up -d --build
+#   docker compose exec goatbot goatbot-sign-in you@example.com
+services:
+  goatbot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    env_file:
+      - path: docker/goatbot.env
+        required: true
+    environment:
+      COMPUTER: local
+    # Only this machine can reach the app. To open it from your other devices, use Tailscale
+    # (`tailscale serve 8787`), not a public port: anyone who reaches it can drive your bots.
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - hermes:/root/.hermes     # the first bot's settings, memory and sign-ins
+      - goatbot:/root/goatbot    # the app's data, the other bots, browser profiles, Library files
+    # Chrome needs more shared memory than Docker's default 64 MB.
+    shm_size: "2gb"
+    # Keep the bots from starving the rest of the computer. Raise it if you have more RAM.
+    mem_limit: "9g"
+    restart: unless-stopped
+
+volumes:
+  hermes:
+  goatbot:
