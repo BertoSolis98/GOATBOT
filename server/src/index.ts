@@ -19,6 +19,7 @@ import { desSelfTest } from './lib/des.js';
 import { configApi } from './routes-config.js';
 import { startIdleWatcher } from './idle.js';
 import { mcpApi } from './mcp.js';
+import { gateApi } from './gate.js';
 import { initEngines } from './engine.js';
 
 if (!desSelfTest()) throw new Error('DES self-test failed');
@@ -31,6 +32,8 @@ const app = new Hono();
 app.get('/api/health', (c) => c.json({ ok: true, engine: 'hermes' }));
 // The app's tools for the agent engines (MCP).
 app.route('/mcp', mcpApi);
+// Approvals for what agents do with their own tools: shell, code, browser, desktop (gate.ts).
+app.route('/gate', gateApi);
 app.route('/api/checkins', checkinsApi);
 app.route('/api/rooms', roomsApi);
 app.route('/api', api);

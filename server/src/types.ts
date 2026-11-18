@@ -94,6 +94,10 @@ export type CardBody =
       logo?: string;
       args: unknown;
       status: 'pending' | 'allowed' | 'always' | 'denied' | 'expired';
+      /** Second line of the card, for actions that are not a connected app (e.g. "Shell command"). */
+      sub?: string;
+      /** The action is too broad to allow for good, so the card has no "Always allow". */
+      noAlways?: boolean;
     }
   | {
       type: 'card';

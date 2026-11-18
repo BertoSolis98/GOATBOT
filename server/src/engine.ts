@@ -7,6 +7,7 @@ import { displayFor } from './box.js';
 import { cdpUrlFor, screenFor } from './computer.js';
 import { db } from './db.js';
 import { env } from './env.js';
+import { GATE_MATCHER } from './gate-tools.js';
 import type { EngineInfo, EngineProvider } from './types.js';
 
 /**
@@ -131,6 +132,31 @@ export function syncPersona(botId: string) {
   fs.writeFileSync(path.join(home, 'SOUL.md'), soul(b));
 }
 
+/**
+ * Put GoatBot's approval gate into a Hermes home: the hook script, where it asks, the hook entry in
+ * config.yaml and the hook's consent entry (gateways never prompt for it). See gate.ts.
+ */
+function installGate(home: string, cfg: any, gateUrl: string, token: string) {
+  const dir = path.join(home, 'agent-hooks');
+  fs.mkdirSync(dir, { recursive: true });
+  const script = path.join(dir, 'goatbot-gate.py');
+  fs.writeFileSync(script, fs.readFileSync(new URL('../box/goatbot-gate.py', import.meta.url), 'utf8'), { mode: 0o755 });
+  fs.chmodSync(script, 0o755);
+  writePrivate(path.join(dir, 'goatbot-gate.json'), JSON.stringify({ url: gateUrl, token }) + '\n');
+
+  const hooks = cfg.hooks && typeof cfg.hooks === 'object' ? cfg.hooks : {};
+  const pre = (Array.isArray(hooks.pre_tool_call) ? hooks.pre_tool_call : []).filter((h: any) => !String(h?.command ?? '').endsWith('goatbot-gate.py'));
+  pre.unshift({ matcher: GATE_MATCHER, command: script, timeout: 300, fail_closed: true });
+  cfg.hooks = { ...hooks, pre_tool_call: pre };
+
+  const allowFile = path.join(home, 'shell-hooks-allowlist.json');
+  let allow: any = {};
+  try { allow = JSON.parse(fs.readFileSync(allowFile, 'utf8')) ?? {}; } catch { /* none yet */ }
+  const approvals: any[] = Array.isArray(allow.approvals) ? allow.approvals : [];
+  if (!approvals.some((x) => x?.event === 'pre_tool_call' && x?.command === script)) approvals.push({ event: 'pre_tool_call', command: script });
+  writePrivate(allowFile, JSON.stringify({ ...allow, approvals }, null, 2) + '\n');
+}
+
 function extraMcpServers(): Record<string, any> {
   if (!env.extraMcpServers) return {};
   try {
@@ -182,6 +208,7 @@ async function writeHome(botId: string): Promise<{ home: string; key: string; di
     ...extraMcpServers(),
     hq: { url: `${env.mcpBaseUrl}/mcp/${botId}`, headers: { Authorization: `Bearer ${mcpToken(botId)}` }, timeout: 1800, connect_timeout: 30 },
   };
+  installGate(home, cfg, `${env.mcpBaseUrl}/gate/${botId}`, mcpToken(botId));
   writePrivate(cfgFile, YAML.stringify(cfg));
 
   if (!fs.existsSync(path.join(home, 'SOUL.md'))) fs.writeFileSync(path.join(home, 'SOUL.md'), soul(b));
@@ -435,7 +462,26 @@ export function initEngines() {
   fs.mkdirSync(env.enginesDir, { recursive: true });
   const bots = db.prepare("SELECT id, is_primary FROM bots WHERE engine IS NULL AND COALESCE(kind,'agent') <> 'room' AND COALESCE(hidden,0)=0 ORDER BY is_primary DESC, created_at ASC").all() as any[];
   for (const b of bots) assignEngine(b.id);
-  for (const b of db.prepare("SELECT id FROM bots WHERE engine='managed'").all() as any[]) provisionEngine(b.id);
+  for (const b of db.prepare("SELECT id FROM bots WHERE engine='managed'").all() as any[]) {
+    refreshGate(b.id);
+    provisionEngine(b.id);
+  }
+}
+
+/** Homes made by an older version, or gateways still running from before a restart, get the current gate. Hermes re-reads hooks by itself. */
+function refreshGate(botId: string) {
+  const home = homeFor(botId);
+  const cfgFile = path.join(home, 'config.yaml');
+  if (!fs.existsSync(cfgFile)) return;
+  try {
+    // Parse strictly: a file we cannot read must not be replaced with a near-empty one.
+    const cfg = YAML.parse(fs.readFileSync(cfgFile, 'utf8')) ?? {};
+    if (typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error('config.yaml is not a mapping');
+    installGate(home, cfg, `${env.mcpBaseUrl}/gate/${botId}`, mcpToken(botId));
+    writePrivate(cfgFile, YAML.stringify(cfg));
+  } catch (e: any) {
+    console.warn(`[engine] could not update the approval gate for ${botId}: ${e?.message ?? e}`);
+  }
 }
 
 // ---------- what the settings panel shows ----------

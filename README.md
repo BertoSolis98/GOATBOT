@@ -38,6 +38,7 @@ The interface is modeled on Grok Bot. Underneath, every bot is a Hermes agent, s
 | **A screen per bot** | Every bot has its own desktop on the shared computer. Watch it live in the side panel, open it full size, or take control with your own mouse and keyboard. |
 | **Your existing Hermes agent, kept as it is** | The first bot is the Hermes agent already running on the computer. Its messaging channels, skills and memory keep working; the app only calls its API. |
 | **Connected apps with approvals** | Bots ask for the app they need and you connect it through Composio. Actions that write (send, post, delete) wait for your OK on a card in the chat. |
+| **Approvals for shell, browser and desktop** | Shell commands, code, opening a site and mouse-and-keyboard control wait for your OK too. See [Approvals](#approvals). |
 | **Model and subscription per bot** | Pick the provider and model in the bot's Engine panel, or sign in to a subscription on the bot's own screen. |
 | **Voice** | Talk to a bot with xAI's realtime voice modes. Real work is handed to the same bot, with the same memory and tools. |
 | **Research on X** | Every bot has an `x_search` tool, backed by xAI. |
@@ -98,6 +99,7 @@ The app is meant to run on the same Orgo computer as Hermes.
 
    `KEYS_FILE` holds `XAI_API_KEY=` and `COMPOSIO_API_KEY=` lines (and `ORGO_API_KEY=` if Hermes' own `.env` has none); it is deleted after the first install. `PRIMARY_CDP_URL` is only for a main agent that already has its own Chrome. The script installs to `/opt/hq`, adds one supervisor program (`hq-app`), and leaves Hermes alone. Running it again with a newer `hq-app.tgz` upgrades the app and keeps its settings and data.
 4. Give the main agent the app's tools: `python3 /opt/hq/app/scripts/add-hq-to-hermes.py`. It adds one `mcp_servers.hq` entry to Hermes' `config.yaml`, keeps a dated copy of the file, and Hermes picks the change up without a restart. `--remove` takes it out again.
+   Then put the [approval gate](#approvals) on the main agent: `python3 /opt/hq/app/scripts/add-gate-to-hermes.py` (same safety checks, `--remove` to undo). Extra bots get it automatically.
 5. Open the public URL and sign in with Google. If Google sign-in is not set up yet, `bash /opt/hq/app/scripts/sign-in-link.sh you@example.com` on the computer prints a one-time sign-in link.
 
 <details>
@@ -108,6 +110,7 @@ On the computer:
 ```bash
 python3 /opt/hq/hq-screen.py undress 99                      # main screen back to how it was (99 = its X display)
 python3 /opt/hq/app/scripts/add-hq-to-hermes.py --remove     # take the tools out of Hermes
+python3 /opt/hq/app/scripts/add-gate-to-hermes.py --remove   # take the approval gate out of Hermes
 supervisorctl stop hq-app && supervisorctl remove hq-app
 rm -rf /etc/supervisor/conf.d/hq-app.conf /opt/hq /var/log/hq /root/goatbot /etc/opt/chrome/policies/managed/hq.json
 ```
@@ -142,6 +145,30 @@ The keys you need:
 | `XAI_API_KEY` | Voice and `x_search` |
 | `SESSION_SECRET` | Sign-in sessions and the tokens agents use to reach `/mcp` |
 
+## Approvals
+
+Hermes runs shell commands, code, the browser and desktop control itself, so the app never sees those calls on its own. GoatBot puts a `pre_tool_call` hook in each agent's Hermes ([`server/box/goatbot-gate.py`](server/box/goatbot-gate.py)) that asks the app ([`server/src/gate.ts`](server/src/gate.ts)) before one of these tools runs. The app answers from your saved permissions or puts an approval card in the chat.
+
+| The agent wants to | Card | "Always allow" saves |
+|---|---|---|
+| Run a simple command (`ls`, `curl`, `grep`) | Shows the command | That program (`shell:ls`) |
+| Run a command that deletes or changes the system (`rm`, `mv`, `chmod`, `kill`, `systemctl`, package managers, `git`), or a chained or redirected one (`&&`, `\|`, `>`, `$(…)`), or an interpreter (`bash`, `python3`, `sudo`) | Shows the command | Nothing: asked every time |
+| Run code (`execute_code`) | Shows the code | Nothing: asked every time |
+| Open a site in the browser | Shows the site | That site (`browser:github.com`) |
+| Use browser developer tools or saved logins | Shows the action | Nothing: asked every time |
+| Click, type or scroll on its screen | Shows the action | Screen control (`computer:control`) |
+
+Taking a screenshot, reading files, searching the web and the app's own tools never ask. Saved permissions are listed in **Settings → Permissions**, where "Ask again" removes one.
+
+How it behaves:
+
+- **Fails closed.** If the hook can't reach the app, or the app doesn't answer, Hermes blocks the call.
+- **About 4½ minutes to answer.** Hermes gives a hook at most 5 minutes; after that the card expires and the call is skipped. Sending a new message also skips any card that is still waiting.
+- **Only turns the app started.** When the main agent is reached through its own channels (iMessage, the CLI), Hermes' own approval rules apply instead.
+- **Hermes' own checks still run.** A command Hermes considers dangerous can still be refused by Hermes after you allow it, because the app does not answer Hermes' own approval prompts yet.
+- **Sites, not clicks.** Opening a site by its address asks; following a link on a page that is already open does not.
+- `GATE_COMPUTER_ACTIONS=0` in `.env` turns the gate off.
+
 ## Models and subscriptions
 
 Open a bot's details panel, **Engine**. Pick a provider and model there. **Sign in to a subscription** opens a terminal on the bot's screen running Hermes' own sign-in for that provider (for example Claude Pro/Max), so you finish it in the viewer and the bot uses that subscription from then on. Check your provider's terms before running an agent on a consumer subscription.
@@ -168,7 +195,7 @@ docs/               architecture; the Orgo and xAI/Composio guides predate the H
 ## Status and limits
 
 - Experimental, no security audit. Bots share one computer and can reach each other's files there.
-- Approval cards cover Composio write actions. What a bot does through its browser or shell is not gated, and Hermes' own "risky command" prompts are not shown in the app yet.
+- Approval cards cover Composio write actions and, through the [approval gate](#approvals), shell commands, code, opening sites and screen control. Hermes' own "risky command" prompts are not shown in the app yet.
 - Four bots at most, because of Orgo's four-screen limit.
 - The screen look is an original implementation inspired by OrgoAI/bops; no code or assets from that repository are used.
 
