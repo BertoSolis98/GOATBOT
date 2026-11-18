@@ -118,6 +118,27 @@ export async function claimToolRow(botId: string, name: string): Promise<number 
   }
 }
 
+/**
+ * A tool Hermes runs itself (shell, browser, desktop) is about to run, and the approval gate wants
+ * to know whether it belongs to a turn started here. `running` is false when no turn of the app is
+ * going on for this bot (the agent was reached some other way, e.g. its own messaging channels).
+ * `seq` is the tool-call row, matched by call id, else by name; null if the stream has not shown it.
+ */
+export async function findCallRow(botId: string, callId: string, name: string): Promise<{ running: boolean; seq: number | null }> {
+  const deadline = Date.now() + 1000;
+  for (;;) {
+    const t = turns.get(botId);
+    if (!t) return { running: false, seq: null };
+    const byId = callId ? t.tools.find((r) => r.callId === callId) : undefined;
+    if (byId) return { running: true, seq: byId.seq };
+    if (Date.now() > deadline) {
+      const byName = [...t.tools].reverse().find((r) => !r.done && !r.claimed && r.name === name);
+      return { running: true, seq: byName?.seq ?? null };
+    }
+    await sleep(40);
+  }
+}
+
 export function noteToolOutcome(botId: string, seq: number | null, outcome: Outcome) {
   if (seq === null) return;
   turns.get(botId)?.outcomes.set(seq, outcome);
@@ -136,6 +157,21 @@ export type ApprovalDecision = 'allow' | 'deny' | 'expired';
 /** Longest a tool call waits for the user. Kept under the engines' 30 minute tool timeout. */
 const APPROVAL_WAIT_MS = 25 * 60_000;
 
+/** How an approval card looks, beyond the tool it is for. */
+export interface ApprovalAsk {
+  key: string;
+  toolkit?: string;
+  title: string;
+  /** Replaces the text made from the arguments. */
+  detail?: string;
+  /** Second line of the card (defaults to the app's name). */
+  sub?: string;
+  /** Too broad to allow for good: the card offers only "Allow" and "Don't allow". */
+  noAlways?: boolean;
+  /** Give up sooner than APPROVAL_WAIT_MS (the approval gate has a 5 minute limit). */
+  waitMs?: number;
+}
+
 const waiters = new Map<string, { botId: string; resolve: (d: ApprovalDecision) => void }>();
 
 function setApprovalCard(botId: string, rowSeq: number, approvalId: string, status: string) {
@@ -150,7 +186,7 @@ const pendingApprovals = (botId: string) => db.prepare("SELECT * FROM approvals 
 /** Put an approval card in the conversation and wait for the user's answer. */
 export async function requestApproval(
   who: { userId: string; botId: string },
-  pol: { key: string; toolkit?: string; title: string },
+  pol: ApprovalAsk,
   args: any,
   rowSeq: number | null,
 ): Promise<ApprovalDecision> {
@@ -159,19 +195,20 @@ export async function requestApproval(
   const tk = pol.toolkit ? await toolkitInfo(pol.toolkit).catch(() => undefined) : undefined;
   const card = appendRow(botId, 'card', {
     type: 'card', card: 'approval', approvalId, title: `Allow ${getBotRow(botId).name} to ${pol.title.split(': ')[1] ?? pol.title}?`,
-    detail: describeArgs(args), tool: pol.key, toolkit: pol.toolkit, toolkitName: tk?.name, logo: tk?.logo, args, status: 'pending',
+    detail: pol.detail ?? describeArgs(args), tool: pol.key, toolkit: pol.toolkit, toolkitName: tk?.name, logo: tk?.logo, args, status: 'pending',
+    ...(pol.sub ? { sub: pol.sub } : {}), ...(pol.noAlways ? { noAlways: true } : {}),
   });
   db.prepare('INSERT INTO approvals(id,bot_id,row_seq,call_id,tool,status,created_at) VALUES (?,?,?,?,?,?,?)').run(approvalId, botId, card.seq, '', pol.key, 'pending', now());
   db.prepare('UPDATE bots SET unread = unread + 1 WHERE id=?').run(botId);
   if (rowSeq !== null) patchToolRow(botId, rowSeq, { status: 'awaiting-approval' });
-  setLive(botId, { isRunning: false, activity: { kind: 'waiting_for_you', since: now() }, awaiting: { reason: humanizeSlug(pol.key), since: now() } });
+  setLive(botId, { isRunning: false, activity: { kind: 'waiting_for_you', since: now() }, awaiting: { reason: pol.sub ?? humanizeSlug(pol.key), since: now() } });
   hub.emit(userId, { type: 'tasks', botId });
   emitBot(botId);
 
   let timer: NodeJS.Timeout | undefined;
   const decision = await new Promise<ApprovalDecision>((resolve) => {
     waiters.set(approvalId, { botId, resolve });
-    timer = setTimeout(() => expireApproval(approvalId), APPROVAL_WAIT_MS);
+    timer = setTimeout(() => expireApproval(approvalId), Math.min(pol.waitMs ?? APPROVAL_WAIT_MS, APPROVAL_WAIT_MS));
   });
   clearTimeout(timer);
   waiters.delete(approvalId);
@@ -181,7 +218,7 @@ export async function requestApproval(
     else noteToolOutcome(botId, rowSeq, { status: 'denied', summary: decision === 'deny' ? 'Not allowed' : 'Skipped' });
   }
   if (!pendingApprovals(botId).length) {
-    if (turns.has(botId)) setLive(botId, { isRunning: true, activity: { kind: decision === 'allow' ? 'connecting_service' : 'thinking', detail: decision === 'allow' ? tk?.name : undefined, since: now() }, awaiting: null });
+    if (turns.has(botId)) setLive(botId, { isRunning: true, activity: { kind: decision !== 'allow' ? 'thinking' : pol.toolkit ? 'connecting_service' : 'working', detail: decision === 'allow' ? tk?.name : undefined, since: now() }, awaiting: null });
     else setLive(botId, { isRunning: false, activity: null, awaiting: null, startedAt: null });
   }
   hub.emit(userId, { type: 'tasks', botId });
@@ -213,6 +250,9 @@ export function resolveApproval(userId: string, approvalId: string, decision: 'a
   if (ap.status !== 'pending') return;
   const waiter = waiters.get(approvalId);
   if (!waiter) return expireApproval(approvalId);
+  // A card that offers no "Always allow" cannot be answered with it.
+  const card = getRow(ap.bot_id, ap.row_seq);
+  if (decision === 'always' && card?.body.type === 'card' && card.body.card === 'approval' && card.body.noAlways) decision = 'allow';
   const status = decision === 'deny' ? 'denied' : decision === 'always' ? 'always' : 'allowed';
   db.prepare('UPDATE approvals SET status=?, resolved_at=? WHERE id=?').run(status, now(), approvalId);
   if (decision === 'always') db.prepare("INSERT OR REPLACE INTO policies(user_id,tool,mode) VALUES (?,?,'always_allow')").run(userId, ap.tool);

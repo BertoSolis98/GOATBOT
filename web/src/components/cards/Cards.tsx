@@ -31,21 +31,23 @@ export function ApprovalCard({ body }: { body: Card<'approval'> }) {
   const pending = body.status === 'pending';
   const decide = (d: 'allow' | 'always' | 'deny') => run(d, () => api.approve(body.approvalId, d));
   const name = body.toolkit ? humanizeToolkit(body.toolkit) : prettyTool(body.tool);
+  // Shell, browser and desktop approvals (gate.ts) name what they are instead of an app.
+  const sub = body.sub ?? name;
   return (
     <div className={`card approval-card${pending ? '' : ' is-resolved'}`}>
       <div className="card__head">
-        <ToolkitLogo name={name} logo={body.toolkit ? `https://logos.composio.dev/api/${body.toolkit.toLowerCase()}` : undefined} size={44} />
+        <ToolkitLogo name={sub} logo={body.toolkit ? `https://logos.composio.dev/api/${body.toolkit.toLowerCase()}` : undefined} size={44} />
         <div className="card__titles">
           <div className="card__title">{body.title}</div>
-          <div className="card__sub">{name}</div>
+          <div className="card__sub">{sub}</div>
         </div>
       </div>
-      {body.detail && <div className="card__body">{body.detail}</div>}
+      {body.detail && <div className={`card__body${body.tool.startsWith('shell:') ? ' card__body--code' : ''}`}>{body.detail}</div>}
       {pending ? (
         <>
           <div className="card__actions">
             <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('deny')}>Don't allow</button>
-            <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('always')}>Always allow</button>
+            {!body.noAlways && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('always')}>Always allow</button>}
             <button type="button" className="btn btn--primary" disabled={!!busy} onClick={() => decide('allow')}>Allow</button>
           </div>
           {error && <div className="card__error">{error}</div>}
